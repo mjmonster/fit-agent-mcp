@@ -16,16 +16,28 @@ LLM-free evals.
 
 ## Status
 
-Server A (`fitness-mcp`) is implemented and proven by the tier-1 structural evals:
-schema invariant, raw-MCP boundary probe (real server, real HTTP, adversarial
-client), scope enforcement, and audit assertions — all green, all LLM-free.
-Next: Server B (LangGraph agent) + tier-2 stub-behavioral evals.
+Both services are implemented and proven by LLM-free CI gates:
+
+- **Tier 1 (structural):** schema invariant (no identity params, recursive),
+  raw-MCP boundary probe against the real server (no bearer / cross-user
+  bearers / smuggled `user_id` / zero-scope token), audit assertions including
+  denied and errored calls.
+- **Tier 2 (stub-behavioral):** a deterministic stub model driven through the
+  REAL LangGraph graph + REAL MCP wire + REAL Server A — proves runtime tool
+  discovery, bearer attachment, the router's no-tool branch, the tool loop,
+  and audit, with zero LLM calls.
+
+Next: tier-3 live evals (routing/injection/red-lines with claude-haiku-4-5),
+Claude Desktop stdio demo, README teaching sections.
 
 ```bash
-# Run Server A locally (set FITNESS_MCP_JWT_SECRET in .env first)
+# Terminal 1 — Server A (set FITNESS_MCP_JWT_SECRET in .env first)
 uv run fitness-mcp init-db
-uv run fitness-mcp issue-token --sub user_001 --scopes read:profile,read:progress,write:meal_log,write:workout_log,write:weight_log
 uv run fitness-mcp serve      # streamable HTTP on 127.0.0.1:8000/mcp
+
+# Terminal 2 — talk to the coach (needs ANTHROPIC_API_KEY for the live model)
+TOKEN=$(uv run fitness-mcp issue-token --sub user_001 --scopes read:profile,read:progress,write:meal_log,write:workout_log,write:weight_log)
+uv run coach-agent chat --token "$TOKEN"
 ```
 
 ## Layout
