@@ -39,7 +39,8 @@ merely discouraged. (More: [confused deputy](#the-confused-deputy-problem).)
 
 Alongside it: **least-privilege scopes** (`read:profile`, `write:meal_log`, …),
 an **audit log** (one row per tool call — including *denied* and *errored* ones),
-and **PII minimization** (return only the fields asked for).
+and **PII minimization** — each tool returns a fixed, minimal field set, never
+raw DB rows or internal ids dumped into the model's context.
 
 ## Architecture
 
@@ -124,12 +125,14 @@ Anthropic-only by design.
   credentials, and own authorization**, reachable by **many** hosts.
 
 **Why this project is MCP and not just in-process tools:** the fitness data is a
-standalone service with its own database and its own authz, meant to be consumed
-by multiple clients — this LangGraph agent over MCP today, [Claude
-Desktop](#what-this-deliberately-is-not) over MCP, a hypothetical mini-app over
-REST tomorrow. If we'd baked DB access into the agent as in-process tools, there
-would be no boundary to secure and nothing to reuse. The security story *and*
-the multi-client story both require the separate service that MCP formalizes.
+standalone service with its own database and its own authz. Today exactly one
+client consumes it — the LangGraph agent in this repo, over MCP. The design
+anticipates a *second* client with **no new server work** — e.g. Claude Desktop
+over MCP (a stdio transport; see [roadmap](#what-this-deliberately-is-not)) or a
+mini-app over REST — which is the whole M+N payoff below. If we'd baked DB access
+into the agent as in-process tools, there would be no boundary to secure and
+nothing to reuse. The security story *and* the multi-client story both require
+the separate service that MCP formalizes.
 
 ### M×N → M+N
 
