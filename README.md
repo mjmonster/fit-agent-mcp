@@ -26,9 +26,15 @@ Both services are implemented and proven by LLM-free CI gates:
   REAL LangGraph graph + REAL MCP wire + REAL Server A — proves runtime tool
   discovery, bearer attachment, the router's no-tool branch, the tool loop,
   and audit, with zero LLM calls.
+- **Tier 3 (live-behavioral, on-demand — never gates CI):** the real coach agent
+  (`claude-haiku-4-5`) against the real server, scored by a declarative YAML
+  harness (`evals/tier3_live/`) that mirrors
+  [mjmonster/llm-agent-evals](https://github.com/mjmonster/llm-agent-evals) —
+  routing, direct + stored prompt-injection, and red-line cases, with a
+  per-category scorecard. The harness's *scoring* logic is unit-tested and gates
+  CI; only the live model runs are on-demand.
 
-Next: tier-3 live evals (routing/injection/red-lines with claude-haiku-4-5),
-Claude Desktop stdio demo, README teaching sections.
+Next: Claude Desktop stdio demo, README teaching sections.
 
 ```bash
 # Terminal 1 — Server A (set FITNESS_MCP_JWT_SECRET in .env first)
@@ -52,8 +58,12 @@ uv run coach-agent chat --token "$TOKEN"
 
 ```bash
 uv sync --dev            # install
-uv run pytest -m "not live"   # tiers 1+2 (CI gate)
+uv run pytest -m "not live"   # unit + tier 1 + tier 2 + tier-3 scoring logic (CI gate)
 uv run ruff check . && uv run ruff format --check .
+
+# Tier-3 live evals (needs ANTHROPIC_API_KEY; spins up Server A itself)
+uv run python evals/tier3_live/runner.py   # prints the scorecard
+uv run pytest -m live                       # same cases as pytest
 ```
 
 ---

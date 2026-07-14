@@ -79,7 +79,12 @@ identity or another user's data flow in through an argument?* If yes, it's wrong
   2. **Stub-behavioral**: a deterministic fake ChatModel replaying scripted tool
      calls through the real LangGraph graph + real wire + real Server A → **gates CI**.
   3. **Live-behavioral** (`claude-haiku-4-5`): routing, injection, red-lines →
-     on-demand only, never gates.
+     on-demand only, never gates. Lives in `evals/tier3_live/`: `cases.yaml`
+     (declarative cases), `harness.py` (pure scoring — unit-tested, gates CI),
+     `runner.py` (`uv run python evals/tier3_live/runner.py` — spins up Server A
+     + real agent, prints a scorecard), `test_live.py` (`pytest -m live`).
+     The `harness` module is imported by its co-located tests via sys.path
+     (evals/ has no `__init__.py`); keep test basenames unique across the tree.
 - **Harness conventions:** mirror `github.com/mjmonster/llm-agent-evals` — YAML
   cases (`expect_tool`, `expect_args_contains`, `forbid_tools`,
   `forbid_output_regex`), per-category scorecards, offline-by-default.
