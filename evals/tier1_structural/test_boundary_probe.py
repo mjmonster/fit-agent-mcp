@@ -132,11 +132,50 @@ async def test_progress_is_scoped_to_bearer_subject(server):
     assert not own_meals & other_meals  # zero overlap between subjects
 
 
+def _minimal_args(schema: dict) -> dict:
+    """Synthesize the smallest valid arguments for a tool from its schema."""
+    fillers = {"string": "x", "integer": 1, "number": 1.0, "boolean": True}
+    properties = schema.get("properties") or {}
+    return {
+        name: fillers.get(properties.get(name, {}).get("type"), "x")
+        for name in schema.get("required", [])
+    }
+
+
+async def test_every_tool_is_scope_gated(server):
+    """A zero-scope bearer must be denied by EVERY tool, discovered dynamically —
+    a future tool that forgets the authz path fails this eval automatically."""
+    headers = {"Authorization": f"Bearer {_token('user_001', scopes=[])}"}
+    async with (
+        create_mcp_http_client(headers=headers) as http_client,
+        streamable_http_client(server["url"], http_client=http_client) as (read, write, _),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        tools = (await session.list_tools()).tools
+        assert tools, "no tools discovered — gate check would be vacuous"
+        for tool in tools:
+            result = await session.call_tool(tool.name, _minimal_args(tool.inputSchema or {}))
+            assert result.isError, f"tool '{tool.name}' ran without any scope"
+            assert "scope" in _text(result), f"tool '{tool.name}' not denied by scope check"
+
+
 async def test_token_without_write_scope_cannot_log(server):
     read_only = _token("user_002", scopes=["read:profile"])
     result = await _call(server["url"], read_only, "log_meal", {"description": "should be denied"})
     assert result.isError
     assert "write:meal_log" in _text(result)
+
+
+async def test_invalid_at_argument_rejected_with_actionable_message(server):
+    result = await _call(
+        server["url"],
+        _token("user_001"),
+        "log_meal",
+        {"description": "lunch", "at": "next tuesday"},
+    )
+    assert result.isError
+    assert "ISO-8601" in _text(result)  # authored guidance, not a raw parser error
 
 
 async def test_audit_rows_carry_the_token_subject_only(server):
@@ -145,5 +184,18 @@ async def test_audit_rows_carry_the_token_subject_only(server):
     await _call(server["url"], _token("user_001"), "get_profile", {})
     await _call(server["url"], _token("user_001"), "log_weight", {"weight_kg": 81.7})
     rows = read_audit_log(db)
-    assert len(rows) == before + 2  # exactly one row per successful tool call
+    assert len(rows) == before + 2  # exactly one row per tool call
     assert all(r["subject"] == "user_001" for r in rows[before:])
+    assert all(r["outcome"] == "ok" for r in rows[before:])
+
+
+async def test_denied_and_errored_calls_are_audited(server):
+    """An attacker probing scopes or triggering errors must leave a trace."""
+    db = Database(server["db_path"])
+    before = len(read_audit_log(db))
+    read_only = _token("user_001", scopes=["read:profile", "read:progress"])
+    await _call(server["url"], read_only, "log_meal", {"description": "should be denied"})
+    await _call(server["url"], read_only, "get_progress", {"period": "99999d"})
+    rows = read_audit_log(db)[before:]
+    assert [r["outcome"] for r in rows] == ["denied", "error"]
+    assert all(r["subject"] == "user_001" for r in rows)

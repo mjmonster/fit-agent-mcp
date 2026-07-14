@@ -47,6 +47,45 @@ async def test_token_without_sub_claim_rejected():
     assert await make_verifier().verify_token(token) is None
 
 
+async def test_token_for_a_different_audience_rejected():
+    token = issue_token(
+        SECRET, sub="user_001", scopes=["read:profile"], audience="http://evil.example/other-api"
+    )
+    assert await make_verifier().verify_token(token) is None
+
+
+async def test_token_from_a_different_issuer_rejected():
+    token = issue_token(
+        SECRET, sub="user_001", scopes=["read:profile"], issuer="http://evil.example"
+    )
+    assert await make_verifier().verify_token(token) is None
+
+
+async def test_token_without_aud_iss_claims_rejected():
+    # A legacy/foreign token signed with the right secret but never bound to
+    # this resource must not be accepted.
+    now = int(time.time())
+    claims = {"sub": "user_001", "scopes": ["read:profile"], "exp": now + 60}
+    token = pyjwt.encode(claims, SECRET, algorithm="HS256")
+    assert await make_verifier().verify_token(token) is None
+
+
+@pytest.mark.parametrize("bad_sub", [123, ["user_001"], {"id": "user_001"}, "", None])
+async def test_non_string_or_empty_sub_rejected(bad_sub):
+    # Signed with the trusted secret and correctly bound, but sub is not a
+    # non-empty string — the verifier must reject, not pass it downstream.
+    now = int(time.time())
+    claims = {
+        "sub": bad_sub,
+        "scopes": ["read:profile"],
+        "aud": "http://127.0.0.1:8000/mcp",
+        "iss": "http://127.0.0.1:8000",
+        "exp": now + 60,
+    }
+    token = pyjwt.encode(claims, SECRET, algorithm="HS256")
+    assert await make_verifier().verify_token(token) is None
+
+
 def test_issue_token_rejects_empty_subject():
     with pytest.raises(ValueError, match="sub"):
         issue_token(SECRET, sub="", scopes=["read:profile"])

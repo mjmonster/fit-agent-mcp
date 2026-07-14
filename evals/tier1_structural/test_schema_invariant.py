@@ -7,6 +7,7 @@ These tests introspect the real FastMCP server instance in-process. They are the
 RED tests that drive Server A's implementation.
 """
 
+from fitness_mcp.auth import REQUIRED_SCOPES
 from fitness_mcp.server import mcp
 
 # Any parameter name that could smuggle an identity through a tool schema.
@@ -61,6 +62,14 @@ async def test_contract_tools_are_registered():
     registered = {t.name for t in tools}
     missing = CONTRACT_TOOLS - registered
     assert not missing, f"contract tools not registered: {sorted(missing)}"
+
+
+async def test_every_registered_tool_has_a_scope_mapping():
+    """Least privilege is deny-by-default: a tool absent from REQUIRED_SCOPES
+    can never be authorized, so registering one unmapped is a wiring bug."""
+    tools = await mcp.list_tools()
+    unmapped = {t.name for t in tools} - set(REQUIRED_SCOPES)
+    assert not unmapped, f"tools registered without a scope mapping: {sorted(unmapped)}"
 
 
 async def test_no_tool_exposes_a_user_identity_parameter():

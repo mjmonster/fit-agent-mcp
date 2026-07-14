@@ -52,18 +52,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
     tool TEXT NOT NULL,
     args_json TEXT NOT NULL,
     at TIMESTAMP NOT NULL,
-    rows_returned INTEGER NOT NULL
+    rows_returned INTEGER NOT NULL,
+    outcome TEXT NOT NULL DEFAULT 'ok'
 );
 """
 
 _PERIOD_RE = re.compile(r"^(\d+)d$")
 
 
+MAX_PERIOD_DAYS = 365
+
+
 def _parse_period(period: str) -> int:
     match = _PERIOD_RE.match(period)
     if not match:
         raise ValueError(f"invalid period '{period}' — expected '<days>d', e.g. '7d'")
-    return int(match.group(1))
+    days = int(match.group(1))
+    if days < 1:
+        raise ValueError(f"invalid period '{period}' — must be at least '1d'")
+    if days > MAX_PERIOD_DAYS:
+        raise ValueError(
+            f"period '{period}' is too long — data can only be retrieved for the "
+            f"past year (max '{MAX_PERIOD_DAYS}d')"
+        )
+    return days
 
 
 def _iso(at: datetime | None) -> str:
@@ -78,7 +90,10 @@ class Database:
 
     @contextmanager
     def connect(self):
-        conn = sqlite3.connect(self.db_path)
+        # WAL + generous busy timeout: readers (e.g. the eval process checking
+        # the audit log) never flake with 'database is locked' during writes.
+        conn = sqlite3.connect(self.db_path, timeout=15)
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -92,6 +107,10 @@ class Database:
         """Create tables and seed synthetic users. Idempotent."""
         with self.connect() as conn:
             conn.executescript(_SCHEMA)
+            # Cheap migration for DBs created before the outcome column existed.
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(audit_log)")}
+            if "outcome" not in columns:
+                conn.execute("ALTER TABLE audit_log ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok'")
             if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
                 return  # already seeded
             self._seed(conn)

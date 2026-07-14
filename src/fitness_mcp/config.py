@@ -2,6 +2,12 @@
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Token binding (RFC 8707 / MCP authorization): tokens are minted for exactly
+# this resource by exactly this issuer, and the verifier enforces both. Static
+# demo values; in production they come from the real authorization server.
+TOKEN_ISSUER = "http://127.0.0.1:8000"
+TOKEN_AUDIENCE = "http://127.0.0.1:8000/mcp"
+
 
 class Settings(BaseSettings):
     """fitness-mcp settings (env prefix: FITNESS_MCP_)."""

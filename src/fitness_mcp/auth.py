@@ -10,6 +10,8 @@ from collections.abc import Callable, Sequence
 import jwt as pyjwt
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
+from fitness_mcp.config import TOKEN_AUDIENCE, TOKEN_ISSUER
+
 # Scope map: tool -> required scope. Single source of truth; unknown tools are
 # denied by default (least privilege).
 REQUIRED_SCOPES: dict[str, str] = {
@@ -25,8 +27,15 @@ class JWTVerifier(TokenVerifier):
     """Stateless HS256 verifier. The secret is provided lazily so the server
     module stays importable without runtime configuration."""
 
-    def __init__(self, secret_provider: Callable[[], str]) -> None:
+    def __init__(
+        self,
+        secret_provider: Callable[[], str],
+        audience: str = TOKEN_AUDIENCE,
+        issuer: str = TOKEN_ISSUER,
+    ) -> None:
         self._secret_provider = secret_provider
+        self._audience = audience
+        self._issuer = issuer
 
     async def verify_token(self, token: str) -> AccessToken | None:
         try:
@@ -34,11 +43,17 @@ class JWTVerifier(TokenVerifier):
                 token,
                 self._secret_provider(),
                 algorithms=["HS256"],
-                options={"require": ["sub", "exp"]},
+                audience=self._audience,
+                issuer=self._issuer,
+                options={"require": ["sub", "exp", "aud", "iss"]},
             )
         except pyjwt.InvalidTokenError:
             return None
         subject = claims["sub"]
+        # PyJWT >= 2.10 already rejects non-string sub; guard both properties
+        # anyway — an empty subject must never become an authenticated identity.
+        if not isinstance(subject, str) or not subject:
+            return None
         return AccessToken(
             token=token,
             client_id=subject,

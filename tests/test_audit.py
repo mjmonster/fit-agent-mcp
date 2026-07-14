@@ -26,6 +26,18 @@ def test_one_audit_row_per_tool_call(db):
     assert '"eggs"' in rows[1]["args_json"]
 
 
+def test_audit_records_outcome_flag(db):
+    record_tool_call(
+        db, subject="user_001", tool="log_meal", args={}, rows_returned=0, outcome="denied"
+    )
+    assert read_audit_log(db)[-1]["outcome"] == "denied"
+
+
+def test_audit_outcome_defaults_to_ok(db):
+    record_tool_call(db, subject="user_001", tool="get_profile", args={}, rows_returned=1)
+    assert read_audit_log(db)[-1]["outcome"] == "ok"
+
+
 def test_audit_subject_never_derived_from_args(db):
     # Attacker-controlled text in args must be stored verbatim but NEVER
     # influence the subject column.

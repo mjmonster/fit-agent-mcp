@@ -18,6 +18,13 @@ def db(tmp_path) -> Database:
     return database
 
 
+def test_connections_use_wal_mode(db):
+    # WAL lets the eval process read the audit log while the server writes,
+    # instead of flaking with 'database is locked'.
+    with db.connect() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
 def test_init_db_is_idempotent(db):
     profile_before = db.get_profile("user_001")
     meals_before = db.get_progress("user_001", "30d")["recent_meals"]
@@ -95,6 +102,22 @@ def test_progress_counts_workouts_and_sums_calories(db):
 def test_progress_invalid_period_raises(db):
     with pytest.raises(ValueError, match="period"):
         db.get_progress("user_001", "next tuesday")
+
+
+@pytest.mark.parametrize("period", ["366d", "9000000d", "99999999999999999999d"])
+def test_progress_period_beyond_one_year_rejected_cleanly(db, period):
+    # Must be a clean ValueError (client-actionable), never an OverflowError.
+    with pytest.raises(ValueError, match="past year"):
+        db.get_progress("user_001", period)
+
+
+def test_progress_period_zero_rejected(db):
+    with pytest.raises(ValueError, match="period"):
+        db.get_progress("user_001", "0d")
+
+
+def test_progress_period_boundary_365d_accepted(db):
+    assert db.get_progress("user_001", "365d")["period_days"] == 365
 
 
 def test_progress_for_subject_with_no_rows_is_zero_shaped(db):
