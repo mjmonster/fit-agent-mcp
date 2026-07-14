@@ -8,7 +8,10 @@
 - agent: chat model bound to the runtime-discovered MCP tools.
 - tools: ToolNode executing MCP calls (bearer already baked into the session).
 - respond: the final user-facing reply — the red-line seam (no diagnosing,
-  no invented numbers, no PII echo).
+  no invented numbers, no PII echo). It runs an UNBOUND model over a history
+  scrubbed of tool_use/tool_result blocks (the Anthropic Messages API rejects
+  those blocks when no `tools` are declared); tool results are folded in as
+  plain text so the reply can be grounded on them.
 
 The model is injected (build_graph(model, tools)): claude-haiku-4-5 in
 production, StubChatModel in the tier-2 evals.
@@ -17,11 +20,16 @@ production, StubChatModel in the tier-2 evals.
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+
+# Cap the agent<->tools cycle so a model stuck re-calling a tool can't burn
+# unbounded LLM+MCP round-trips; when hit, we route to respond and let it
+# summarize what it has rather than raising GraphRecursionError.
+MAX_TOOL_LOOPS = 5
 
 ROUTER_PROMPT = SystemMessage(
     "You are a router for a fitness-coach agent. Decide whether the user's "
@@ -45,6 +53,36 @@ RESPOND_PROMPT = SystemMessage(
 class CoachState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     route: str
+    steps: int  # agent<->tools loop counter (last-write-wins, no reducer)
+
+
+def _text(content) -> str:
+    """Flatten message content (a str, or a list of content blocks) to text."""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content or []:
+        if isinstance(block, dict):
+            parts.append(str(block.get("text") or block.get("content") or ""))
+        else:
+            parts.append(str(block))
+    return " ".join(p for p in parts if p)
+
+
+def _for_responder(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """History with tool_use/tool_result blocks removed, safe for an unbound
+    model. Tool results become plain-text notes so respond can ground on them."""
+    cleaned: list[AnyMessage] = []
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            cleaned.append(HumanMessage(f"(tool result: {_text(m.content)})"))
+        elif isinstance(m, AIMessage):
+            text = _text(m.content)
+            if text.strip():  # drop tool-call-only assistant turns (no text)
+                cleaned.append(AIMessage(text))
+        else:
+            cleaned.append(m)
+    return cleaned
 
 
 def build_graph(model: BaseChatModel, tools: list[BaseTool]):
@@ -53,19 +91,24 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]):
 
     def router(state: CoachState) -> dict:
         verdict = model.invoke([ROUTER_PROMPT, state["messages"][-1]])
-        route = "tools" if "tools" in str(verdict.content).lower() else "chat"
+        route = "tools" if _text(verdict.content).strip().lower().startswith("tools") else "chat"
         return {"route": route}
 
     def agent(state: CoachState) -> dict:
-        return {"messages": [agent_model.invoke(state["messages"])]}
+        reply = agent_model.invoke(state["messages"])
+        return {"messages": [reply], "steps": state.get("steps", 0) + 1}
 
     def respond(state: CoachState) -> dict:
-        reply = model.invoke([RESPOND_PROMPT, *state["messages"]])
+        reply = model.invoke([RESPOND_PROMPT, *_for_responder(state["messages"])])
         return {"messages": [reply]}
 
     def after_agent(state: CoachState) -> Literal["tools", "respond"]:
         last = state["messages"][-1]
-        return "tools" if getattr(last, "tool_calls", None) else "respond"
+        if not getattr(last, "tool_calls", None):
+            return "respond"
+        if state.get("steps", 0) >= MAX_TOOL_LOOPS:
+            return "respond"  # loop cap reached — stop gracefully
+        return "tools"
 
     graph = StateGraph(CoachState)
     graph.add_node("router", router)
