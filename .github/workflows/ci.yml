@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install
+        run: uv sync --dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      # Tiers 1 + 2 only — deterministic, keyless. Tier 3 (live LLM) never gates.
+      - name: Structural + stub-behavioral evals
+        run: uv run pytest -m "not live"
+        env:
+          FITNESS_MCP_JWT_SECRET: ci-only-secret-not-a-real-deployment
